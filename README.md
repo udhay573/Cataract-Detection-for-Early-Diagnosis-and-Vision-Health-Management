@@ -1,6 +1,4 @@
-# Cataract-Detection-for-Early-Diagnosis-and-Vision-Health-Management
-
-👁️ Cataract Detection for Early Diagnosis and Vision Health Management
+# 👁️ Cataract Detection for Early Diagnosis and Vision Health Management
 
 📁 Dataset
 * **Source:** ODIR-5K (Ocular Disease Intelligent Recognition)
