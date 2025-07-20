@@ -1,0 +1,818 @@
+import numpy as np
+import pandas as pd
+import cv2
+import random
+from tqdm import tqdm
+import matplotlib.pyplot as plt
+from sklearn.metrics import roc_curve, auc, classification_report
+from sklearn.model_selection import train_test_split
+from sklearn.preprocessing import label_binarize
+from tensorflow.keras.preprocessing.image import load_img, img_to_array
+from tensorflow.keras.applications import ResNet50
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import Dense, Dropout, Flatten
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.callbacks import EarlyStopping
+
+import zipfile
+import os
+zip_path = "images_dataset.zip"  
+extract_path = "./extracted_data" 
+with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+    zip_ref.extractall(extract_path)
+
+print(f"Files extracted to: {extract_path}")
+
+import os
+
+base_path = "./extracted_data"
+odir_path = os.path.join(base_path, "ODIR-5K")
+training_images_path = os.path.join(odir_path, "Training Images")
+testing_images_path = os.path.join(odir_path, "Testing Images")
+excel_file_path = os.path.join(odir_path, "data.xlsx")
+csv_file_path = os.path.join(base_path, "full_df.csv")
+
+print(f"Base Path: {base_path}")
+print(f"ODIR Path: {odir_path}")
+print(f"Training Images Path: {training_images_path}")
+print(f"Testing Images Path: {testing_images_path}")
+print(f"Excel File Path: {excel_file_path}")
+print(f"CSV File Path: {csv_file_path}")
+
+
+import os
+
+odir_path = "./extracted_data/ODIR-5K"
+
+
+import pandas as pd
+
+excel_file_path = "./extracted_data/ODIR-5K/ODIR-5K/data.xlsx"
+
+try:
+    df = pd.read_excel(excel_file_path)
+    print(f"DataFrame loaded successfully. Shape: {df.shape}")
+    print(df.head())
+except UnicodeDecodeError:
+    print("Error: File is not UTF-8 encoded. Attempting alternative solutions.")
+
+import pandas as pd
+
+csv_path = os.path.join(extract_path, "full_df.csv") 
+df = pd.read_csv(csv_path)
+
+print(df.head())
+
+
+print(df.head())
+print("Columns in DataFrame:", df.columns)
+
+print("Missing Left-Fundus values:", df["Left-Fundus"].isnull().sum())
+print("Missing Right-Fundus values:", df["Right-Fundus"].isnull().sum())
+
+df = df.dropna(subset=["Left-Fundus", "Right-Fundus"])
+
+print(f"DataFrame shape after removing missing rows: {df.shape}")
+
+import os
+
+training_images_path = "./extracted_data/ODIR-5K/ODIR-5K/Training Images"
+if os.path.exists(training_images_path):
+    training_files = os.listdir(training_images_path)
+    print(f"Total files in Training Images directory: {len(training_files)}")
+    print("Sample files:", training_files[:10])
+else:
+    print(f"Directory not found: {training_images_path}")
+
+print("Sample Left-Fundus filenames from DataFrame:")
+print(df["Left-Fundus"].head())
+
+missing_files = df["Left-Fundus"].apply(lambda x: x not in training_files).sum()
+print(f"Number of Left-Fundus files not found in directory: {missing_files}")
+
+df["Left-Fundus"] = df["Left-Fundus"].str.lower()
+df["Right-Fundus"] = df["Right-Fundus"].str.lower()
+
+
+df["left_filepath"] = df["Left-Fundus"].apply(lambda x: os.path.join(training_images_path, x))
+df["right_filepath"] = df["Right-Fundus"].apply(lambda x: os.path.join(training_images_path, x))
+
+print(df[["Left-Fundus", "left_filepath"]].head())
+print(df[["Right-Fundus", "right_filepath"]].head())
+
+df["left_exists"] = df["left_filepath"].apply(os.path.exists)
+df["right_exists"] = df["right_filepath"].apply(os.path.exists)
+df = df[df["left_exists"] & df["right_exists"]]
+print(f"DataFrame shape after filtering invalid paths: {df.shape}")
+
+import cv2
+import numpy as np
+from tqdm import tqdm
+
+def batch_preprocess_images(filepaths, batch_size=100, target_size=(224, 224)):
+    
+    images = []
+    for i in range(0, len(filepaths), batch_size):
+        batch = filepaths[i:i+batch_size]
+        batch_images = []
+        for path in batch:
+            try:
+               
+                image = cv2.imread(path, cv2.IMREAD_COLOR)
+                if image is None:
+                    print(f"Image not found or unreadable: {path}")
+                    continue
+                image = cv2.resize(image, target_size)
+                batch_images.append(image / 255.0) 
+            except Exception as e:
+                print(f"Error processing image {path}: {e}")
+                continue
+      
+        if batch_images:
+            images.append(np.array(batch_images))
+    return np.concatenate(images, axis=0) if images else np.array([])
+
+
+image_size = 224
+batch_size = 100
+print("Processing Left-Fundus images...")
+X_left = batch_preprocess_images(df["left_filepath"].values, batch_size=batch_size, target_size=(image_size, image_size))
+print(f"Processed Left-Fundus images. Shape: {X_left.shape}")
+
+print("Processing Right-Fundus images...")
+X_right = batch_preprocess_images(df["right_filepath"].values, batch_size=batch_size, target_size=(image_size, image_size))
+print(f"Processed Right-Fundus images. Shape: {X_right.shape}")
+
+
+def has_cataract(text):
+    return 1 if "cataract" in text.lower() else 0
+
+# Create labels for left and right eyes
+df["left_cataract"] = df["Left-Diagnostic Keywords"].apply(has_cataract)
+df["right_cataract"] = df["Right-Diagnostic Keywords"].apply(has_cataract)
+
+# Combine labels for binary classification
+y = (df["left_cataract"] | df["right_cataract"]).values 
+
+print(f"Labels shape: {y.shape}")
+
+
+print(f"X_left shape: {X_left.shape if 'X_left' in locals() else 'Not defined'}")
+print(f"X_right shape: {X_right.shape if 'X_right' in locals() else 'Not defined'}")
+
+
+X = X_left 
+
+from sklearn.model_selection import train_test_split
+
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+print(f"Training data: {X_train.shape}, {y_train.shape}")
+print(f"Testing data: {X_test.shape}, {y_test.shape}")
+
+
+
+def has_cataract(text):
+    if "cataract" in text.lower(): 
+        return 1
+    else:
+        return 0
+
+# Create new columns for left and right cataract
+df["left_cataract"] = df["Left-Diagnostic Keywords"].apply(lambda x: has_cataract(x))
+df["right_cataract"] = df["Right-Diagnostic Keywords"].apply(lambda x: has_cataract(x))
+
+# Print the count of right cataract samples
+print("Right cataract sample counts:")
+print(df["right_cataract"].value_counts())
+
+
+# Extract filenames for cataract images
+left_cataract = df.loc[(df.C == 1) & (df.left_cataract == 1)]["Left-Fundus"].values
+right_cataract = df.loc[(df.C == 1) & (df.right_cataract == 1)]["Right-Fundus"].values
+
+# Print a few filenames
+print("Left cataract filenames:", left_cataract[:10])
+print("Right cataract filenames:", right_cataract[:15])
+
+# Print the number of images in left and right cataract
+print(f"Number of images in left cataract: {len(left_cataract)}")
+print(f"Number of images in right cataract: {len(right_cataract)}")
+
+# Sample filenames for normal fundus images
+left_normal = df.loc[(df.C == 0) & (df["Left-Diagnostic Keywords"] == "normal fundus")]["Left-Fundus"].sample(300, random_state=42).values
+right_normal = df.loc[(df.C == 0) & (df["Right-Diagnostic Keywords"] == "normal fundus")]["Right-Fundus"].sample(300, random_state=42).values
+
+# Print a few filenames
+print("Right normal fundus filenames:", right_normal[:15])
+
+
+# Concatenate filenames for cataract and normal samples
+cataract = np.concatenate((left_cataract, right_cataract), axis=0)
+normal = np.concatenate((left_normal, right_normal), axis=0)
+
+# Print the number of cataract and normal images
+print(f"Total cataract images: {len(cataract)}")
+print(f"Total normal images: {len(normal)}")
+
+
+dataset_dir = "./extracted_data/ODIR-5K/ODIR-5K/Training Images"
+
+
+missing_files = [file for file in cataract if file not in os.listdir(dataset_dir)]
+print(f"Number of missing files: {len(missing_files)}")
+if missing_files:
+    print(f"Sample missing files: {missing_files[:5]}")
+
+
+df["Left-Fundus"] = df["Left-Fundus"].str.lower()
+df["Right-Fundus"] = df["Right-Fundus"].str.lower()
+
+
+df["Left-Fundus"] = df["Left-Fundus"].str.replace(".jpg", ".png")
+df["Right-Fundus"] = df["Right-Fundus"].str.replace(".jpg", ".png")
+
+
+df["left_filepath"] = df["Left-Fundus"].apply(lambda x: os.path.join(dataset_dir, x))
+df["right_filepath"] = df["Right-Fundus"].apply(lambda x: os.path.join(dataset_dir, x))
+
+# Filter rows with valid file paths
+df = df[df["left_filepath"].apply(os.path.exists)]
+df = df[df["right_filepath"].apply(os.path.exists)]
+
+print(f"Filtered DataFrame shape: {df.shape}")
+
+
+def create_dataset(image_category, label, dataset_dir, image_size=224):
+    dataset = []
+    invalid_images = []  
+    for img in tqdm(image_category, desc="Processing Images"):
+        image_path = os.path.join(dataset_dir, img)
+        try:
+            
+            print(f"Processing: {image_path}")
+          
+            if not os.path.exists(image_path):
+                print(f"Warning: File not found: {image_path}")
+                invalid_images.append(img)
+                continue
+
+            image = cv2.imread(image_path, cv2.IMREAD_COLOR)
+            if image is None:
+                print(f"Warning: Cannot read image: {image_path}")
+                invalid_images.append(img)
+                continue
+
+            image = cv2.resize(image, (image_size, image_size))
+            dataset.append([np.array(image), np.array(label)])
+        except Exception as e:
+            print(f"Error processing image {image_path}: {e}")
+            invalid_images.append(img)
+            continue
+
+    random.shuffle(dataset)
+
+    if invalid_images:
+        print(f"Total invalid images: {len(invalid_images)}")
+        print(f"Sample invalid images: {invalid_images[:5]}")
+
+    return dataset
+
+
+import cv2
+
+test_image_path = os.path.join(dataset_dir, cataract[0]) 
+if os.path.exists(test_image_path):
+    image = cv2.imread(test_image_path, cv2.IMREAD_COLOR)
+    if image is not None:
+        print(f"Successfully loaded test image: {test_image_path}")
+    else:
+        print(f"Failed to load image: {test_image_path}")
+else:
+    print(f"Test image not found: {test_image_path}")
+
+
+
+dataset_dir = "./extracted_data/ODIR-5K/ODIR-5K/Training Images"
+
+
+# Define parameters
+dataset_dir = "./extracted_data/ODIR-5K/ODIR-5K/Training Images"  # Update this path
+image_size = 224
+
+# Create the cataract dataset
+print("Creating cataract dataset...")
+cataract_dataset = create_dataset(cataract, label=1, dataset_dir=dataset_dir, image_size=image_size)
+print(f"Number of cataract images processed: {len(cataract_dataset)}")
+
+# Create the normal dataset
+print("Creating normal dataset...")
+normal_dataset = create_dataset(normal, label=0, dataset_dir=dataset_dir, image_size=image_size)
+print(f"Number of normal images processed: {len(normal_dataset)}")
+
+# Combine datasets
+dataset = cataract_dataset + normal_dataset
+random.shuffle(dataset)
+
+# Verify the final dataset
+print(f"Total number of images in the dataset: {len(dataset)}")
+
+
+print(f"Number of valid images in the dataset: {len(dataset)}")
+if len(dataset) == 0:
+    print("Error: Dataset is empty after preprocessing. Check file paths and data integrity.")
+
+
+# Define dataset directory and image size
+dataset_dir = "./extracted_data/ODIR-5K/ODIR-5K/Training Images"  # Update this path if needed
+image_size = 224
+
+# Create the cataract dataset
+print("Creating cataract dataset...")
+cataract_dataset = create_dataset(cataract, label=1, dataset_dir=dataset_dir, image_size=image_size)
+print(f"Number of cataract images processed: {len(cataract_dataset)}")
+
+
+# Create the normal dataset
+print("Creating normal dataset...")
+normal_dataset = create_dataset(normal, label=0, dataset_dir=dataset_dir, image_size=image_size)
+print(f"Number of normal images processed: {len(normal_dataset)}")
+
+
+# Combine cataract and normal datasets
+dataset = cataract_dataset + normal_dataset
+
+# Shuffle the combined dataset
+random.shuffle(dataset)
+
+# Verify the combined dataset
+print(f"Total number of images in the dataset: {len(dataset)}")
+
+
+import matplotlib.pyplot as plt
+
+plt.figure(figsize=(12, 7))
+for i in range(10):
+    sample = random.choice(dataset)
+    image, label = sample[0], sample[1]
+    plt.subplot(2, 5, i + 1)
+    plt.imshow(cv2.cvtColor(image, cv2.COLOR_BGR2RGB)) 
+    plt.title("Cataract" if label == 1 else "Normal")
+    plt.axis("off")
+plt.tight_layout()
+plt.show()
+
+
+X = np.array([i[0] for i in dataset]).reshape(-1, image_size, image_size, 3)  # Images
+y = np.array([i[1] for i in dataset]) 
+
+# Split into training and testing sets
+from sklearn.model_selection import train_test_split
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+
+print(f"Training data: {X_train.shape}, {y_train.shape}")
+print(f"Testing data: {X_test.shape}, {y_test.shape}")
+
+
+import time
+
+from tensorflow.keras.applications.vgg19 import VGG19
+vgg = VGG19(weights="imagenet",include_top = False,input_shape=(image_size,image_size,3))
+
+for layer in vgg.layers:
+    layer.trainable = False
+
+from tensorflow.keras import Sequential
+from tensorflow.keras.layers import Flatten,Dense
+model = Sequential()
+model.add(vgg)
+model.add(Flatten())
+model.add(Dense(1,activation="sigmoid"))
+model.summary()
+
+start_time = time.time()
+
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
+from sklearn.metrics import classification_report, roc_curve, auc
+import matplotlib.pyplot as plt
+import numpy as np
+import time
+
+# Compile the model
+model.compile(optimizer="adam", loss="binary_crossentropy", metrics=["accuracy"])
+
+# Define callbacks
+checkpoint = ModelCheckpoint(
+    "vgg19.h5",
+    monitor="val_accuracy",  # Use 'val_accuracy' instead of 'val_acc'
+    verbose=1,
+    save_best_only=True,
+    save_weights_only=False
+)
+earlystop = EarlyStopping(monitor="val_accuracy", patience=5, verbose=1)
+
+# Train the model
+start_time = time.time()
+history = model.fit(
+    X_train, y_train,
+    batch_size=32,
+    epochs=5,
+    validation_data=(X_test, y_test),
+    verbose=1,
+    callbacks=[checkpoint, earlystop]
+)
+training_time = time.time() - start_time
+print(f"Training Time: {training_time:.2f} seconds")
+
+# Evaluate the model
+loss, accuracy = model.evaluate(X_test, y_test)
+print(f"Test Loss: {loss:.4f}")
+print(f"Test Accuracy: {accuracy:.4f}")
+
+# Plot the training history
+plt.figure(figsize=(12, 7))
+plt.plot(history.history["accuracy"], label="Train Accuracy")
+plt.plot(history.history["val_accuracy"], label="Validation Accuracy")
+plt.xlabel("Epoch")
+plt.ylabel("Accuracy")
+plt.legend()
+plt.title("Training and Validation Accuracy")
+plt.show()
+
+# Plot the training and validation loss
+plt.figure(figsize=(12, 7))
+plt.plot(history.history["loss"], label="Train Loss")
+plt.plot(history.history["val_loss"], label="Validation Loss")
+plt.xlabel("Epoch")
+plt.ylabel("Loss")
+plt.legend()
+plt.title("Training and Validation Loss")
+plt.show()
+
+# Generate predictions on the testing set
+y_pred = model.predict(X_test)
+y_pred_binary = (y_pred > 0.5).astype(int)
+
+# Compute ROC curve and AUC
+fpr, tpr, _ = roc_curve(y_test, y_pred)
+roc_auc = auc(fpr, tpr)
+
+# Plot ROC curve
+plt.figure(figsize=(10, 7))
+plt.plot(fpr, tpr, label="ROC curve (area = %0.2f)" % roc_auc)
+plt.plot([0, 1], [0, 1], "k--")
+plt.xlim([0.0, 1.0])
+plt.ylim([0.0, 1.05])
+plt.xlabel("False Positive Rate")
+plt.ylabel("True Positive Rate")
+plt.title("Receiver Operating Characteristic (Cataract)")
+plt.legend(loc="lower right")
+plt.show()
+
+target_names = ['Normal', 'Cataract']
+classification_rep = classification_report(y_test, y_pred_binary, target_names=target_names)
+print(classification_rep)
+
+test_loss, test_acc = model.evaluate(X_test, y_test)
+print('Test Loss:', test_loss)
+print('Test Accuracy:', test_acc)
+
+# Plot the training and validation loss
+plt.figure(figsize=(12, 7))
+plt.plot(history.history['loss'], label='Training Loss')
+plt.plot(history.history['val_loss'], label='Testing Loss')
+plt.xlabel('Epoch')
+plt.ylabel('Loss')
+plt.legend()
+plt.title('Training and Testing Loss')
+plt.show()
+
+# Calculate the training time
+training_time = time.time() - start_time
+
+# Print the training time
+print('Training Time:', training_time, 'seconds')
+
+import matplotlib.pyplot as plt
+
+models = ['ResNet-101', 'VGG-19', 'ResNet-152', 'DenseNet-169', 'DenseNet-121']
+precision_normal = [0.50, 0.96, 0.80, 0.67, 0.95]
+precision_cataract = [0.46, 0.96, 0.88, 0.90, 0.92]
+recall_normal = [0.95, 0.95, 0.79, 0.66, 0.94]
+recall_cataract = [0.09, 0.95, 0.86, 0.95, 0.94]
+f1_score_normal = [0.49, 0.95, 0.79, 0.66, 0.94]
+f1_score_cataract = [0.16, 0.95, 0.87, 0.92, 0.93]
+accuracy = [49.4, 95.4, 79.5, 66.5, 94.6]
+
+
+plt.figure(figsize=(12, 6))
+plt.bar(models, precision_normal, label='Precision (Normal)', color='blue', alpha=0.7)
+plt.bar(models, precision_cataract, label='Precision (Cataract)', color='orange', alpha=0.7)
+plt.xlabel('Models')
+plt.ylabel('Precision')
+plt.title('Precision Comparison for Each Model')
+plt.legend()
+plt.xticks(rotation=15)
+plt.tight_layout()
+plt.show()
+
+plt.figure(figsize=(12, 6))
+plt.bar(models, recall_normal, label='Recall (Normal)', color='blue', alpha=0.7)
+plt.bar(models, recall_cataract, label='Recall (Cataract)', color='orange', alpha=0.7)
+plt.xlabel('Models')
+plt.ylabel('Recall')
+plt.title('Recall Comparison for Each Model')
+plt.legend()
+plt.xticks(rotation=15)
+plt.tight_layout()
+plt.show()
+
+plt.figure(figsize=(12, 6))
+plt.bar(models, f1_score_normal, label='F1-score (Normal)', color='blue', alpha=0.7)
+plt.bar(models, f1_score_cataract, label='F1-score (Cataract)', color='orange', alpha=0.7)
+plt.xlabel('Models')
+plt.ylabel('F1-score')
+plt.title('F1-score Comparison for Each Model')
+plt.legend()
+plt.xticks(rotation=15)
+plt.tight_layout()
+plt.show()
+
+plt.figure(figsize=(12, 6))
+plt.bar(models, accuracy, color='green', alpha=0.7)
+plt.xlabel('Models')
+plt.ylabel('Accuracy (%)')
+plt.title('Accuracy Comparison for Each Model')
+plt.xticks(rotation=15)
+plt.tight_layout()
+plt.show()
+
+
+import pandas as pd
+
+data = {
+    "Model": ["ResNet-101", "VGG-19", "ResNet-152", "DenseNet-169", "DenseNet-121"],
+    "Precision (Normal)": precision_normal,
+    "Precision (Cataract)": precision_cataract,
+    "Recall (Normal)": recall_normal,
+    "Recall (Cataract)": recall_cataract,
+    "F1-score (Normal)": f1_score_normal,
+    "F1-score (Cataract)": f1_score_cataract,
+    "Accuracy (%)": accuracy
+}
+
+df = pd.DataFrame(data)
+
+df_formatted = df.style.format({
+    "Precision (Normal)": "{:.2f}",
+    "Precision (Cataract)": "{:.2f}",
+    "Recall (Normal)": "{:.2f}",
+    "Recall (Cataract)": "{:.2f}",
+    "F1-score (Normal)": "{:.2f}",
+    "F1-score (Cataract)": "{:.2f}",
+    "Accuracy (%)": "{:.2f}"
+})
+
+print("Model Performance Comparison Table:")
+print(df)
+
+df_formatted
+
+
+import matplotlib.pyplot as plt
+from prettytable import PrettyTable
+
+models = ['VGG-19', 'ResNet-101', 'DenseNet-169', 'ResNet-152', 'DenseNet-121']
+training_times = [633 / 60, (227 + 245 + 230 + 220 + 253) / 60, 
+                  (203 + 171 + 170 + 179 + 187 + 198 + 168) / 60, 
+                  (428 + 403 + 437 + 407 + 489 + 410 + 356 + 358 + 351 + 353) / 60, 
+                  (148 + 138 + 141 + 138 + 137 + 135 + 137 + 143 + 139 + 151) / 60]
+
+plt.figure(figsize=(10, 6))
+plt.bar(models, training_times, color='skyblue')
+plt.xlabel('Models')
+plt.ylabel('Training Time (minutes)')
+plt.title('Training Times of Different Models')
+plt.xticks(rotation=15)
+plt.tight_layout()
+plt.show()
+
+table = PrettyTable()
+table.field_names = ["Model", "Training Time (minutes)"]
+
+for model, time in zip(models, training_times):
+    table.add_row([model, f"{time:.2f}"])
+
+print(table)
+
+
+import matplotlib.pyplot as plt
+from prettytable import PrettyTable
+
+models = ['VGG-19', 'ResNet-101', 'ResNet-152', 'DenseNet-169', 'DenseNet-121']
+test_accuracy = [0.9540, 0.4937, 0.7950, 0.6653, 0.9456]
+test_loss = [0.8065, 233.51, 1.426, 1.153, 0.290]
+
+plt.figure(figsize=(10, 6))
+plt.bar(models, test_accuracy, color='skyblue')
+plt.xlabel('Models')
+plt.ylabel('Testing Accuracy')
+plt.title('Testing Accuracy of Different Models')
+plt.xticks(rotation=45, ha='right')
+plt.tight_layout()
+plt.show()
+
+plt.figure(figsize=(10, 6))
+plt.bar(models, test_loss, color='lightcoral')
+plt.xlabel('Models')
+plt.ylabel('Testing Loss')
+plt.title('Testing Loss of Different Models')
+plt.xticks(rotation=45, ha='right')
+plt.tight_layout()
+plt.show()
+
+table = PrettyTable()
+table.field_names = ["Model", "Testing Accuracy", "Testing Loss"]
+
+for model, accuracy, loss in zip(models, test_accuracy, test_loss):
+    table.add_row([model, f"{accuracy:.4f}", f"{loss:.3f}"])
+
+print(table)
+
+
+import pandas as pd
+from IPython.display import display
+
+# Data provided for the table
+data = {
+    "Model": ["ResNet-101", "VGG-19", "ResNet-152", "DenseNet-169", "DenseNet-121"],
+    "Accuracy (%)": [49.4, 95.4, 79.5, 66.5, 94.6],
+    "Precision (Normal)": [0.50, 0.96, 0.80, 0.67, 0.95],
+    "Precision (Cataract)": [0.46, 0.96, 0.88, 0.90, 0.92],
+    "Recall (Normal)": [0.95, 0.95, 0.79, 0.66, 0.94],
+    "Recall (Cataract)": [0.09, 0.95, 0.86, 0.95, 0.94],
+    "F1-Score (Normal)": [0.49, 0.95, 0.79, 0.66, 0.94],
+    "F1-Score (Cataract)": [0.16, 0.95, 0.87, 0.92, 0.93],
+}
+
+# Create the DataFrame
+metrics_df = pd.DataFrame(data)
+
+# Format numerical columns to 2 decimal places
+metrics_df = metrics_df.style.format({
+    "Accuracy (%)": "{:.1f}",
+    "Precision (Normal)": "{:.2f}",
+    "Precision (Cataract)": "{:.2f}",
+    "Recall (Normal)": "{:.2f}",
+    "Recall (Cataract)": "{:.2f}",
+    "F1-Score (Normal)": "{:.2f}",
+    "F1-Score (Cataract)": "{:.2f}"
+})
+
+# Display the table
+print("Performance Metrics of Different Models:")
+display(metrics_df)
+
+
+import matplotlib.pyplot as plt
+
+# Data for loss (based on updated model order)
+models = ["ResNet-101", "VGG-19", "ResNet-152", "DenseNet-169", "DenseNet-121"]
+train_loss = [14.91, 0.574, 7.24, 0.1758, 0.228]  # Replace with actual training losses
+val_loss = [90.08, 0.692, 0.537, 0.3064, 0.338]   # Replace with actual validation losses
+
+# Plot training and validation losses
+plt.figure(figsize=(10, 6))
+plt.plot(models, train_loss, label="Training Loss", marker='o', color='blue')
+plt.plot(models, val_loss, label="Validation Loss", marker='o', color='orange')
+plt.title("Training and Validation Loss for Models")
+plt.xlabel("Model")
+plt.ylabel("Loss")
+plt.legend()
+plt.xticks(rotation=45, ha='right')  # Rotate x-axis labels for better readability
+plt.grid(axis='y', linestyle='--', alpha=0.7)  # Add gridlines for clarity
+plt.show()
+
+
+import matplotlib.pyplot as plt
+
+# Data for accuracy (based on provided model metrics)
+models = ["ResNet-101", "VGG-19", "ResNet-152", "DenseNet-169", "DenseNet-121"]
+train_accuracy = [49.0, 96.0, 79.0, 66.0, 94.0]  # Replace with actual training accuracy
+val_accuracy = [49.4, 95.4, 79.5, 66.5, 94.6]   # Replace with actual validation accuracy
+
+# Plot training and validation accuracy
+plt.figure(figsize=(10, 6))
+plt.plot(models, train_accuracy, label="Training Accuracy", marker='o', color='green')
+plt.plot(models, val_accuracy, label="Validation Accuracy", marker='o', color='purple')
+plt.title("Training and Validation Accuracy for Models")
+plt.xlabel("Model")
+plt.ylabel("Accuracy (%)")
+plt.legend()
+plt.xticks(rotation=45, ha='right')  # Rotate x-axis labels for better readability
+plt.grid(axis='y', linestyle='--', alpha=0.7)  # Add gridlines for clarity
+plt.show()
+
+
+from tensorflow.keras.models import load_model
+
+best_model_path = "vgg19_fold3.h5" 
+best_model = load_model(best_model_path)
+
+test_loss, test_acc = best_model.evaluate(X_test, y_test)
+print(f"Test Loss: {test_loss:.4f}")
+print(f"Test Accuracy: {test_acc:.4f}")
+
+
+from tensorflow.keras.preprocessing.image import load_img, img_to_array
+import numpy as np
+import matplotlib.pyplot as plt
+
+def predict_cataract(image_path, model, image_size=224):
+   
+    image = load_img(image_path, target_size=(image_size, image_size))
+    image_array = img_to_array(image) / 255.0  
+    image_batch = np.expand_dims(image_array, axis=0) 
+
+    prediction = model.predict(image_batch)[0][0]
+    result = "Cataract" if prediction > 0.5 else "Normal"
+
+    plt.figure(figsize=(6, 6))
+    plt.imshow(image)
+    plt.title(f"Prediction: {result}")
+    plt.axis("off")
+    plt.show()
+
+    return result
+
+image_path = "cat.png" 
+result = predict_cataract(image_path, best_model)
+print(f"The prediction for the image is: {result}")
+
+
+def predict_cataract(image_path, model, image_size=224):
+   
+    image = load_img(image_path, target_size=(image_size, image_size))
+    image_array = img_to_array(image) / 255.0  
+    image_batch = np.expand_dims(image_array, axis=0) 
+
+    prediction = model.predict(image_batch)[0][0]
+    result = "Cataract" if prediction > 0.5 else "Normal"
+
+    plt.figure(figsize=(6, 6))
+    plt.imshow(image)
+    plt.title(f"Prediction: {result}")
+    plt.axis("off")
+    plt.show()
+
+    return result
+
+image_path = "nor_2.png" 
+result = predict_cataract(image_path, best_model)
+print(f"The prediction for the image is: {result}")
+
+
+
+
+
+
+
+
+
+
+
+
+import matplotlib.pyplot as plt
+
+# Data for loss
+models = ["VGG-19", "ResNet101", "ResNet152", "DenseNet121", "DenseNet169"]
+train_loss = [0.574, 14.91, 7.24, 0.228, 0.1758]  # Replace with training losses
+val_loss = [0.692, 90.08, 0.537, 0.338, 0.3064]  # Replace with validation losses
+
+# Plot
+plt.figure(figsize=(10, 6))
+plt.plot(models, train_loss, label="Training Loss", marker='o', color='blue')
+plt.plot(models, val_loss, label="Validation Loss", marker='o', color='orange')
+plt.title("Training and Validation Loss for Models")
+plt.xlabel("Model")
+plt.ylabel("Loss")
+plt.legend()
+plt.show()
+
+
+# Example accuracy history for training and validation
+train_accuracy = [93.0, 91.5, 92.3, 94.0, 93.5]  # Replace with actual training accuracy
+val_accuracy = [92.5, 91.0, 92.0, 93.8, 93.2]  # Replace with actual validation accuracy
+
+plt.figure(figsize=(10, 6))
+plt.plot(models, train_accuracy, label="Training Accuracy", marker='o')
+plt.plot(models, val_accuracy, label="Validation Accuracy", marker='o')
+plt.title("Training and Validation Accuracy for Models")
+plt.xlabel("Model")
+plt.ylabel("Accuracy (%)")
+plt.legend()
+plt.show()
+
+
+
+
